@@ -1,6 +1,11 @@
 (ns cosycat.autosuggest
   (:require [reagent.core :as reagent]
+            [re-frame.core :as re-frame]
+            [cljs.core.async :refer [put!]]
             [goog.string :as gstr]
+            [cosycat.utils :refer [debounce]]
+            [cosycat.app-utils :refer [query-user dekeyword]]
+            [cosycat.components :refer [user-thumb]]
             [react-bootstrap.components :as bs]
             [react-autosuggest.core :refer [autosuggest]]))
 
@@ -63,7 +68,7 @@
   [s]
   (re-find #".*=.*" s))
 
-(defn fetch-requested
+(defn fetch-requested-tag
   "general suggestion f"
   [tag-suggestions suggestions & {:keys [scope]}]
   (fn [value]
@@ -79,12 +84,11 @@
     (reset! my-atom (f (.-value arg)))))
 
 (defn on-change-suggest
-  ([value-atom] (on-change-suggest value-atom identity))
-  ([value-atom f]
+  ([value-atom sugg-atom] (on-change-suggest value-atom sugg-atom (fn [& args])))
+  ([value-atom sugg-atom f]
    (fn [e new-val]
-     (let [callback (or f identity)]
-       (callback (.-newValue new-val))
-       (reset! value-atom (.-newValue new-val))))))
+     (when f (f (.-newValue new-val) @sugg-atom))
+     (reset! value-atom (.-newValue new-val)))))
 
 (defn get-suggestion-value [value-atom]
   (fn [arg]
@@ -93,7 +97,7 @@
         val
         (str (aget arg "tag") "=" val)))))
 
-(defn render-suggestion [value-atom]
+(defn render-tag-suggestion [value-atom]
   (fn [arg]
     (let [val (aget arg "val")]
       (if (has-key? @value-atom)
@@ -101,7 +105,7 @@
         (reagent/as-element [:p val])))))
 
 (defn suggest-annotations
-  [tagsets {:keys [value on-change on-key-press display-suggestions] :as props}]
+  [tagsets {:keys [value on-change on-key-press] :as props}]
   (let [sugg-atom (reagent/atom [])
         value-atom (or value (reagent/atom ""))]
     (fn [tagsets {:keys [on-change on-key-press] :as props}]
@@ -112,14 +116,61 @@
           [autosuggest
            {:suggestions @sugg-atom
             :multiSection true
-            :onSuggestionsUpdateRequested (wrap-react sugg-atom (fetch-requested tag-suggs suggs))
+            :onSuggestionsUpdateRequested (wrap-react sugg-atom (fetch-requested-tag tag-suggs suggs))
             :onSuggestionsClearRequested #(reset! sugg-atom [])
             :getSuggestionValue (get-suggestion-value value-atom)
-            :renderSuggestion (render-suggestion value-atom)
+            :renderSuggestion (render-tag-suggestion value-atom)
             :getSectionSuggestions #(aget % "tags")
             :renderSectionTitle #(reagent/as-element [:strong (aget % "name")])
-            :inputProps (merge (dissoc props :display-suggestions)
-                               {:onChange (on-change-suggest value-atom on-change)
+            :inputProps (merge props
+                               {:onChange (on-change-suggest value-atom sugg-atom on-change)
                                 :value @value-atom})}]]]))))
 
-(defn suggest-users [])
+(defn fetch-remote
+  [sugg-atom & {:keys [remove-project-users] :or {remove-project-users true}}]
+  (fn [arg]
+    (let [value (.-value arg)]
+      (when-not (empty? value)
+        (re-frame/dispatch
+         [:query-users value sugg-atom :remove-project-users remove-project-users])))))
+
+(defn split-on-match [s subs]
+  (when s
+    (let [match-start (.indexOf s subs)
+          match-end (+ match-start (count subs))
+          pre  (.substring s 0 match-start)
+          post (.substring s match-end)]
+      [pre subs post])))
+
+(defn render-user-suggestion [value-atom]
+  (fn [arg]
+    (let [{:keys [username firstname lastname email avatar] :as user}
+          (js->clj arg :keywordize-keys true)
+          [field v] ((query-user @value-atom) user)]
+      (reagent/as-element
+       [:div {:style {:margin "10px 0"}}
+        [user-thumb {:height "25px" :width "25px"} (:href avatar)]
+        [:span {:style {:padding-left "10px"}} username]
+        (when-let [[pre match post] (split-on-match v @value-atom)]
+          [:span (str "  [" (dekeyword field) ":" pre) [:strong match] (str post "]")])]))))
+
+(defn suggest-users
+  [{:keys [value on-change remove-project-users] :as props :or {remove-project-users false}}]
+  (let [sugg-atom (reagent/atom [])
+        value-atom (or value (reagent/atom ""))
+        fetch-sugg (debounce (fetch-remote sugg-atom remove-project-users) 500)]
+    (fn [{:keys [value on-change] :as props}]
+      [:div.container-fluid
+       [:div.row
+        [autosuggest
+         {:suggestions @sugg-atom
+          :onSuggestionsUpdateRequested fetch-sugg
+          :onSuggestionsClearRequested #(reset! sugg-atom [])
+          :getSuggestionValue #(aget % "username")
+          :shouldRenderSuggestions (fn [value] true)
+          :renderSuggestion (render-user-suggestion value-atom)
+          :inputProps
+          (merge
+           props
+           {:onChange (on-change-suggest value-atom sugg-atom on-change)
+            :value @value-atom})}]]])))

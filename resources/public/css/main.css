@@ -103,3 +103,21 @@ div.well.selected:hover {
     box-sizing:border-box;
 }
 
+.input-cell {
+    border-radius: 0px;
+    height: 230%;
+}
+
+.hit-pager:hover {
+    color: #158cba;
+}
+
+.truncate {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+span.log-line:hover {
+    color: white;
+}

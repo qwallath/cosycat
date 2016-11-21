@@ -1,7 +1,7 @@
 (ns cosycat.query.components.annotation-modal
   (:require [reagent.core :as reagent]
             [re-frame.core :as re-frame]
-            [cosycat.utils :refer [by-id parse-annotation nbsp format]]
+            [cosycat.utils :refer [by-id parse-annotation nbsp format wrap-key]]
             [cosycat.app-utils :refer [dekeyword]]
             [cosycat.roles :refer [check-annotation-role]]
             [cosycat.components :refer [disabled-button-tooltip]]
@@ -30,46 +30,50 @@
   (re-frame/dispatch
    [:dispatch-annotation
     ann-map                    ;ann-map
-    (->> tokens (map :hit-id))    ;hit-ids
+    (->> tokens (map :hit-id)) ;hit-ids
     (->> tokens (map :id))])) ;token-ids
 
-(defn update-annotations [{:keys [key value]} tokens]
+(defn update-annotations [{{:keys [key value]} :ann :as ann-map} tokens]
   (doseq [{hit-id :hit-id {ann key} :anns} tokens
-          :let [{:keys [_id _version]} ann]]
+          :let [{:keys [_id _version]} ann]] ;get corresponding existing ann
     (re-frame/dispatch
      [:update-annotation
       {:update-map {:_id _id :_version _version :value value :hit-id hit-id}}])))
 
 (defn deselect-tokens [tokens]
   (doseq [{:keys [hit-id id]} tokens]
-    (re-frame/dispatch
-     [:unmark-token
-      {:hit-id hit-id
-       :token-id id}])))
+    (re-frame/dispatch [:unmark-token {:hit-id hit-id :token-id id}])))
 
-(defn suggest-annotation [new-val existin-annotation]
-  (re-frame/dispatch [:notify {:message "To be implemented"}]))
+(defn suggest-annotation-edits [ann-key new-val anns me]
+  (doseq [{{{:keys [_id _version ann span history]} ann-key} :anns hit-id :hit-id} anns
+          :let [users (vec (into #{me} (map :username history)))
+                ann-data {:_version _version :_id _id :hit-id hit-id :value new-val :span span}]
+          :when (not= new-val (:value ann))]
+    (re-frame/dispatch [:notify {:message "Edit not authorized"}])
+    ;; (re-frame/dispatch [:open-annotation-edit ann-data users])
+    ))
 
 (defn trigger-dispatch
   [action {:keys [value marked-tokens annotation-modal-show current-ann me my-role]}]
   (if-let [[key val] (parse-annotation @value)]
     (let [{:keys [empty-annotation existing-annotation-owner existing-annotation]}
           (group-tokens @marked-tokens @current-ann @me)]
-      (cond (not (check-annotation-role action @my-role)) ;user is not authorized
-            (notify-not-authorized action @my-role)
-            (and (empty? empty-annotation) ;user suggestion to change
-                 (empty? existing-annotation-owner)
-                 (not (empty? existing-annotation)))
-            (suggest-annotation val existing-annotation)
-            :else (let [key-val {:key key :value val}] ;dispatch annotations
-                    (dispatch-annotations key-val empty-annotation)
-                    (update-annotations key-val existing-annotation-owner)
-                    (deselect-tokens empty-annotation)
-                    (deselect-tokens existing-annotation-owner)))
+      (cond
+        ;; user is not authorized
+        (not (check-annotation-role action @my-role)) (notify-not-authorized action @my-role)
+        ;; user suggestion to change
+        (and (empty? empty-annotation)
+             (empty? existing-annotation-owner)
+             (not (empty? existing-annotation)))
+        (suggest-annotation-edits key val existing-annotation @me)
+        ;; dispatch annotations
+        :else (let [ann-map {:ann {:key key :value val}}]
+                (dispatch-annotations ann-map empty-annotation)
+                (update-annotations ann-map existing-annotation-owner)
+                (deselect-tokens empty-annotation)
+                (deselect-tokens existing-annotation-owner)))
+      ;; finally
       (swap! annotation-modal-show not))))
-
-(defn wrap-key [key-code f]
-  (fn [e] (when (= key-code (.-charCode e)) (f))))
 
 (defn update-current-ann [current-ann value]
   (fn [target]

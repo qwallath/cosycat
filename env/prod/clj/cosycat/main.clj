@@ -22,12 +22,12 @@
    :database-url (env :database-url)
    :corpora (env :corpora)})
 
-(defn create-prod-system [config-map]
+(defn create-prod-system [config-map debug]
   (let [{:keys [handler port database-url corpora]} config-map]
     (-> (component/system-map
          :db (new-db database-url)
          :ws (new-ws)
-         :http-server (new-http-server {:port port :components [:db :ws]}))
+         :http-server (new-http-server {:port port :debug debug :components [:db :ws]}))
         (component/system-using
          {:http-server [:db :ws]
           :ws          [:db]}))))
@@ -46,14 +46,15 @@
         "  clean      Cleans the app environment in the cwd"]
        (string/join \newline)))
 
-(def cli-options [])
+(def cli-options
+  [["-d" "--debug DEBUG" "run app in debug mode"]])
 
 (defn error-msg [errors]
   (str "The following errors occurred while parsing your command:\n\n"
        (string/join \newline errors)))
 
 (defn exit [status msg]
-  (println msg)
+  (timbre/info msg)
   (System/exit status))
 
 (defn this-jar-path [& {:keys [ns] :or {ns cosycat.main}}]
@@ -72,19 +73,19 @@
         avatar-path (:avatar-path env)
         cwd-path (cwd)
         jar-path (this-jar-path)]
-    (println (format "Starting app in [%s]"  cwd-path))
-    (println (format "Jar executable located in path [%s]" jar-path))
+    (timbre/info (format "Starting app in [%s]"  cwd-path))
+    (timbre/info (format "Jar executable located in path [%s]" jar-path))
     (when-not (= cwd-path jar-path)
-      (do (println (->> ["The app isn't running in the same dir as it is located."
-                         "You might result into troubles."
-                         "Stopping the application now..."]
-                        (string/join \newline)))
+      (do (timbre/info (->> ["The app isn't running in the same dir as it is located."
+                             "This might result into troubles."
+                             "Stopping the application now..."]
+                            (string/join \newline)))
           (exit 1 "Done. Goodbye!")))
     (when-not (.exists (io/file resource-path))
       (io/make-parents (str resource-path avatar-path "dummy")))))
 
-(defn run-server []
-  (let [^com.stuartsierra.component.SystemMap system (create-prod-system prod-config-map)]
+(defn run-server [& {:keys [debug]}]
+  (let [^com.stuartsierra.component.SystemMap system (create-prod-system prod-config-map debug)]
     (ensure-dynamic-resource-path)
     (.addShutdownHook 
      (Runtime/getRuntime) 
@@ -127,7 +128,7 @@
       (nil? action)   (exit 1 (usage summary))
       errors          (exit 1 (error-msg errors)))
     (case action
-      "start" (run-server)
+      "start" (run-server :debug (:debug options))
       "clean" (clean-env)
       (exit 1 (usage summary)))))
 

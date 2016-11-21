@@ -3,12 +3,12 @@
             [schema.core :as s]
             [ajax.core :refer [POST GET]]
             [cosycat.schemas.annotation-schemas :refer [annotation-schema]]
-            [cosycat.app-utils :refer [deep-merge is-last-partition parse-token token-id->span span->token-id]]
+            [cosycat.app-utils :refer [deep-merge is-last-partition token-id->span span->token-id]]
             [cosycat.utils :refer [format get-msg now]]
-            [cosycat.backend.middleware :refer [standard-middleware no-debug-middleware]]
+            [cosycat.backend.middleware :refer [standard-middleware]]
             [taoensso.timbre :as timbre]))
 
-;;; Incoming annotations
+;;; Incoming annotations; query-panel
 (defn update-hit [hit anns]
   (mapv (fn [{token-id :id :as token}]
           (if-let [ann (get anns token-id)]
@@ -16,9 +16,14 @@
             token))
         hit))
 
-(defn delete-ann [hit token-id key]
+(defn is-token? [id token-id-or-ids]
+  (if (sequential? token-id-or-ids)
+    (contains? (apply hash-set token-id-or-ids) id)
+    (= id token-id-or-ids)))
+
+(defn delete-ann [hit token-id-or-ids key]
   (mapv (fn [{id :id anns :anns :as token}]
-          (if (contains? anns key)
+          (if (and (is-token? id token-id-or-ids) (contains? anns key))
             (assoc token :anns (dissoc anns key))
             token))
         hit))
@@ -42,16 +47,19 @@
   (let [results-by-id (get-in db [:projects project :session :query :results-by-id])
         path [:projects project :session :query :results-by-id hit-id :hit]]
     (if (contains? results-by-id hit-id)
-      (update-in db path update-hit anns) ;found hit by id
+      ;; found hit by id
+      (update-in db path update-hit anns)
       (if-let [hit-id (find-hit-id (keys anns) (vals results-by-id))]
-        (update-in db path update-hit anns) ;found hit for annotation
-        db)))) ;couldn't find hit for annotation
+        ;; found hit for annotation
+        (update-in db path update-hit anns)
+        ;; couldn't find hit for annotation
+        db))))
 
 (defmethod add-annotations cljs.core/PersistentVector
   [db ms]
   (reduce (fn [db m] (add-annotations db m)) db ms))
 
-(re-frame/register-handler              ;generic handler
+(re-frame/register-handler ;; generic handler
  :add-annotation
  standard-middleware
  (fn [db [_ map-or-maps]] (add-annotations db map-or-maps)))
@@ -64,30 +72,33 @@
          results (vals (get-in db [:projects project :session :query :results-by-id]))
          token-id-or-ids (span->token-id span)]
      (if-let [hit (get-in db path)]
-       (update-in db path delete-ann token-id-or-ids key) ;found hit by id
+       ;; found hit by id
+       (update-in db path delete-ann token-id-or-ids key)
        (if-let [hit-id (find-hit-id token-id-or-ids results)]
-         (update-in db path delete-ann token-id-or-ids key) ;found hit for annotation
-         db))))) ;couldn't find hit
+         ;; found hit for annotation
+         (update-in db path delete-ann token-id-or-ids key)
+         ;; couldn't find hit
+         db)))))
 
 (defn fetch-annotation-handler [& {:keys [is-last]}]
-  (fn [ann]
-    (re-frame/dispatch [:add-annotation ann])
+  (fn [data]
+    (re-frame/dispatch [:add-annotation data])
     (when is-last
       (re-frame/dispatch [:stop-throbbing :fetch-annotations]))))
 
 (defn fetch-annotation-error-handler []
   (fn [data]
     (re-frame/dispatch [:stop-throbbing :fetch-annotations])
-    (timbre/info "Couldn't fetch anns" data)))
+    (timbre/warn "Couldn't fetch anns" data)))
 
-(re-frame/register-handler
+(re-frame/register-handler ;; general annotation fetcher for query hits
  :fetch-annotations
  standard-middleware
- (fn [db [_ {:keys [page-margins]}]]
+ (fn [db [_ {:keys [page-margins]}]] ;; [{:start token-id :end token-id :hit-id .. :doc ..}]
    (let [project (get-in db [:session :active-project])
          corpus (get-in db [:projects project :session :query :results-summary :corpus])
          margins (count page-margins)
-         partition-size 35]
+         partition-size 20]
      (re-frame/dispatch [:start-throbbing :fetch-annotations])
      (doseq [[i subpage-margins] (map-indexed vector (partition-all partition-size page-margins))
              :let [is-last (is-last-partition margins partition-size i)]]
@@ -97,10 +108,30 @@
              :error-handler (fetch-annotation-error-handler)})))
    db))
 
+(defn fetch-annotations-in-span [handler]
+  (fn [db [_ {:keys [start end hit-id doc corpus]} & args]]
+    (let [project (get-in db [:session :active-project])]
+      (GET "/annotation/page"
+           {:params {:page-margins [{:start start :end end :hit-id hit-id :doc doc}]
+                     :project project :corpus corpus}
+            :handler #(handler (first %) args) ;; payload will be [{:keys [hit-id project anns]}]
+            :error-handler #(timbre/warn "Couldn't fetch annotations" (str %))})
+      db)))
+
+(re-frame/register-handler
+ :fetch-annotations-issue-hit
+ (let [handler (fn [{:keys [hit-id project anns]} & [{issue-id :id :as issue}]]
+                 (re-frame/dispatch
+                  [:update-issue-meta issue-id [:hit-map :hit] (fn [hit] (update-hit hit anns))]))]
+   (fetch-annotations-in-span handler)))
+
+(re-frame/register-handler ;; groups annotations by hit-id
+ :query-annotations
+ (fn [db _]))
+
 ;;; Outgoing annotations
 (s/defn make-annotation :- annotation-schema
   ([ann-map hit-id token-id]
-   (timbre/debug token-id)
    (merge ann-map {:hit-id hit-id :span (token-id->span token-id) :timestamp (now)}))
   ([ann-map hit-id token-from token-to]
    (merge ann-map {:hit-id hit-id :span (token-id->span token-from token-to) :timestamp (now)})))
@@ -117,15 +148,10 @@
          "IOB" (get-msg [:annotation :error :IOB] B O message))
        (assoc {} :message)))
 
-(defn dispatch-annotation-history [data] ;data should be anns
-  (re-frame/dispatch [:register-history [:project-events] {:type :annotation :data data}]))
-
 (defmethod dispatch-annotation-handler cljs.core/PersistentArrayMap
   [{status :status message :message data :data}]
   (case status
     :ok (do (re-frame/dispatch [:add-annotation data])
-            ;; add update
-            (dispatch-annotation-history data)
             (re-frame/dispatch [:notify {:message (str "Added 1 annotation")}]))
     :error (re-frame/dispatch [:notify (notification-message data message)])))
 
@@ -135,8 +161,6 @@
         message (str "Added " (count oks) " annotations with " (count errors) " errors")]
     (when-not (empty? oks)
       (do (re-frame/dispatch [:add-annotation (mapv :data oks)])
-          ;; add update
-          (dispatch-annotation-history (mapv :data oks))
           (re-frame/dispatch [:notify {:message message}])))
     (doseq [{data :data message :message} errors]
       (re-frame/dispatch [:notify (notification-message data message)]))))
@@ -148,11 +172,12 @@
 
 (re-frame/register-handler
  :dispatch-annotation
- (fn [db [_ ann & args]]
+ (fn [db [_ {ann-query :query :as ann-map} & args]]
    (let [project (get-in db [:session :active-project])
          corpus (get-in db [:projects project :session :query :results-summary :corpus])
-         query (get-in db [:projects project :session :query :results-summary :query-str])         
-         ann-map {:ann ann :corpus corpus :query query}]
+         db-query (get-in db [:projects project :session :query :results-summary :query-str])
+         ann-map (assoc ann-map :corpus corpus :query (or ann-query db-query))]
+     (assert (:query ann-map) "missing `query` in ann-map")
      (try (POST "/annotation/new"
                 {:params (apply package-annotation ann-map project args)
                  :handler dispatch-annotation-handler
@@ -165,7 +190,7 @@
 (defn update-annotation-handler
   [{status :status message :message data :data}]
   (condp = status
-    :ok (do (re-frame/dispatch [:add-annotation data]) (dispatch-annotation-history data))
+    :ok (re-frame/dispatch [:add-annotation data])
     :error (re-frame/dispatch
             [:notify
              {:message (format "Couldn't update annotation! Reason: [%s]" message)
@@ -185,11 +210,13 @@
      db)))
 
 (defn remove-annotation-handler
-  [{{project :project hit-id :hit-id span :span key :key :as data} :data status :status message :message}]
+  [{{project :project hit-id :hit-id span :span key :key :as data} :data
+    status :status message :message}]
   (condp = status
     :ok (re-frame/dispatch [:remove-annotation project hit-id key span])
-    :error (re-frame/dispatch [:notify {:message (format "Couldn't remove annotation! Reason: [%s]" message)
-                                        :meta data}])))
+    :error (re-frame/dispatch
+            [:notify {:message (format "Couldn't remove annotation! Reason: [%s]" message)
+                      :meta data}])))
 
 (re-frame/register-handler
  :delete-annotation
@@ -202,20 +229,20 @@
             :error-handler error-handler})
      db)))
 
-;;; Utils
+;;; annotation dispatch utils
 (defmulti package-annotation
   "packages annotation data for the server. It only supports bulk payloads for token annotations"
   (fn [ann-map-or-maps project hit-id token-id & [token-to]]
     [(type ann-map-or-maps) (coll? token-id)]))
 
-(defmethod package-annotation           ;simple token annotation
+(defmethod package-annotation ;; simple token annotation
   [cljs.core/PersistentArrayMap false]
   ([ann-map project hit-id token-id]
    {:project project :ann-map (make-annotation ann-map hit-id token-id)})
   ([ann-map project hit-id token-from token-to]
    {:project project :ann-map (make-annotation ann-map hit-id token-from token-to)}))
 
-(defmethod package-annotation           ;bulk token annotation
+(defmethod package-annotation ;; bulk token annotation
   [cljs.core/PersistentArrayMap true]
   [ann-map project hit-ids token-ids]
   (->> (mapv (fn [token-id hit-id] (make-annotation ann-map hit-id token-id)) token-ids hit-ids)
@@ -224,7 +251,6 @@
 (defmethod package-annotation
   [cljs.core/PersistentVector true]
   [anns project hit-ids token-ids]
-  (timbre/debug "anns" anns "hit-ids" hit-ids)
   (assert (apply = (map count [anns hit-ids])) "Each ann must have a hit-id")
   (->> (mapv (fn [ann hit-id token-id] (make-annotation ann hit-id token-id)) anns hit-ids token-ids)
        (assoc {:project project} :ann-map)))

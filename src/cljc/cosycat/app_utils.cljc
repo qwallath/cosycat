@@ -97,7 +97,22 @@
 
 (defn dekeyword [k] (apply str (rest (str k))))
 
+(defn normalize-by [coll by]
+  (zipmap (map by coll) coll))
+
+(defn includes? [s substr]
+  #?(:clj (.contains s substr)
+     :cljs (not= -1 (.indexOf s substr))))
+
+(defn not-implemented []
+  (ex-info "Action not implemented" {:code :not-implemented}))
+
 ;;; logic
+(defn query-user [value]
+  (fn [{:keys [firstname lastname username email]}]
+    (some (fn [[k v]] (when (includes? v value) [k v]))
+          [[:firstname firstname] [:lastname lastname] [:username username] [:email email]])))
+
 (defn invalid-project-name [s]
   (or #?(:clj  (re-find #"[ ^\W+]" s)
          :cljs (gpattern/matchStringOrRegex (js/RegExp "[ ^\\W+]") s))
@@ -105,45 +120,49 @@
 
 (defn server-project-name [s] (str "_" s))
 
-(defn pending-users [{:keys [updates users] :as project}]
-  (let [non-app (->> users (filter #(= "guest" (:role %))) (map :username))
-        rest-users (remove (apply hash-set non-app) (map :username users))
-        agreed-users (filter (apply hash-set rest-users)
-                             (->> updates (filter #(= "delete-project-agree" (:type %)))
-                                  (map :username)))
-        pending (remove (apply hash-set agreed-users) rest-users)]
-    {:non-app non-app :agreed-users (vec (apply hash-set agreed-users)) :pending pending}))
+(defn find-delete-issue
+  "denormalize issues first in case of normalized project data"
+  [issues]
+  (let [issues (if (vector? issues) issues (vals issues))]
+    (->> issues
+         (filter #(= "delete-project-agree" (:type %)))
+         first)))
+
+(defn get-pending-users
+  "compute the status of each user with respect to a project-delete issue"
+  ([{:keys [issues users] :as project}]
+   (-> (find-delete-issue issues) (get-pending-users users)))
+  ([{{agreed-users :agreed} :data :as delete-issue} users]
+   (let [NA-users (->> users (filter #(= "guest" (:role %))) (map :username))
+         pending (remove (apply hash-set (concat NA-users agreed-users)) (map :username users))]
+     {:NA-users (vec NA-users) :agreed-users (vec agreed-users) :pending-users (vec pending)})))
 
 ;;; parse token id
-(defn -parse-token
+(defn parse-token-id
   "parses token id and returns a map with token id metadata"
   [token-id & {:keys [format] :or {format :simple}}]
-  (case format
-    :complex (let [[doc id] #?(:clj  (clojure.string/split token-id #"\.")
-                                :cljs (.split token-id #"\."))]
-                {:doc doc :id (->int id)})
-    :simple {:id (->int token-id)}))
-
-(defn includes? [s substr]
-  #?(:clj (.contains s substr)
-     :cljs (not= -1 (.indexOf s substr))))
-
-(defn parse-token [token-id]
-  (cond (integer? token-id) (-parse-token token-id)
-        (and (string? token-id) (includes? token-id ".")) (-parse-token token-id :format :complex)
+  (cond (integer? token-id) {:id (->int token-id)}
+        (string? token-id) (let [[_ doc-id id] (re-find #"(.*)\.([^\.]*)" token-id)]
+                             (assert (and doc-id id) (str "Unknown token-id format: " token-id))
+                             {:doc doc-id :id (->int id)})
         :else (let [msg (str "Unknown token-id format: " token-id)]
                 (throw #?(:clj (ex-info msg {:token-id token-id})
                           :cljs (js/Error. msg))))))
 
+(defn parse-hit-id                      ;TODO: corpus independent
+  [hit-id]
+  (let [[_ doc-id hit-start hit-end] (re-find #"(.*)\.([^\.]*)\.([^\.]*)" hit-id)]
+    {:doc-id doc-id :hit-start hit-start :hit-end hit-end}))
+
 (defn token-id->span
   ([token-id]
-   (let [{doc :doc scope :id} (parse-token token-id)]
+   (let [{doc :doc scope :id} (parse-token-id token-id)]
      (if doc
        {:type "token" :scope scope :doc doc}
        {:type "token" :scope scope})))
   ([token-from token-to]
-   (let [{doc-from :doc scope-from :id} (parse-token token-from)
-         {doc-to :doc scope-to :id} (parse-token token-to)]
+   (let [{doc-from :doc scope-from :id} (parse-token-id token-from)
+         {doc-to :doc scope-to :id} (parse-token-id token-to)]
      (if (and doc-from doc-to)
        (do (assert (= doc-from doc-to) "Annotation spans over document end")
            {:type "IOB" :scope {:B scope-from :O scope-to} :doc doc-from})
@@ -163,7 +182,5 @@
    in order to be able to do integer-based queries (>=, <, etc.). We increase doc number to avoid
    dropping doc number in case it is 0"
   [token-id]
-  (if (integer? token-id)
-    token-id
-    (let [[doc id] (clojure.string/split "0.123" #"\.")]
-      (-> (str (inc (->int doc)) id) ->int))))
+  (let [{:keys [doc id]} (parse-token-id token-id)]
+    (-> (str (inc (->int doc)) id) ->int)))

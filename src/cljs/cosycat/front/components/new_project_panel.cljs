@@ -1,11 +1,11 @@
-(ns cosycat.front.components.new-project-panel
+>(ns cosycat.front.components.new-project-panel
   (:require [reagent.core :as reagent]
             [re-frame.core :as re-frame]
             [react-bootstrap.components :as bs]
             [cosycat.components :refer [css-transition-group]]
             [cosycat.utils :refer [by-id]]
             [cosycat.app-utils :refer [invalid-project-name atom? deep-merge]]
-            [cosycat.front.components.users-input :refer [users-input-component]]
+            [cosycat.autosuggest :refer [suggest-users]]
             [goog.string :as gstr]
             [taoensso.timbre :as timbre]))
 
@@ -72,15 +72,13 @@
         (when @status {:style {:color "red"}})
         (str "Add a Description" (when @status (str " (" @status ")")))]])))
 
-(defn new-project-form [selected-users]
+(defn new-project-panel [selected-users]
   (fn [selected-users]
-    [bs/well
-     [:div.container-fluid
-      [name-input-component]
-      [spacer]
-      [desc-input-component]
-      [spacer]
-      [users-input-component selected-users]]]))
+    [:div.container-fluid
+     {:style {:border "1px solid rgba(0, 0, 0, 0.05)" :padding "15px"}}
+     [name-input-component]
+     [spacer]
+     [desc-input-component]]))
 
 (defn submit-project [{:keys [name description users user-projects]}]
   (let [project {:name name :description description :users users}]
@@ -99,32 +97,15 @@
           :users (vec (vals @selected-users))
           :user-projects @user-projects})))))
 
-(defn project-btn [open? selected-users]
+(defn new-project-btn [open? selected-users]
   (let [user-projects (re-frame/subscribe [:session :user-info :projects])]
     (fn [open? selected-users]
       [bs/button-toolbar
        {:class "pull-right"}
        [bs/button
-        {:onClick (on-new-project open? selected-users user-projects)
-         :bsStyle (if-not @open? "info" "success")}
+        {:onClick (on-new-project open? selected-users user-projects)}
         (if-not @open? "New project" "Submit project")]
        (when @open?
          [bs/button
-          {:onClick #(reset! open? false)
-           :bsStyle "success"}
+          {:onClick #(reset! open? false)}
           "Close"])])))
-
-(defn new-project-btn [open?]
-  (let [selected-users (reagent/atom {})
-        users (re-frame/subscribe [:session :users])]
-    (fn [open?]
-      [:div
-       [css-transition-group
-        {:transition-name "notification"
-         :transition-enter-timeout 0
-         :transition-leave-timeout 0}
-        (when @open?
-          [:div
-           [:h2#new-project {:style {:padding-bottom "30px"}} "New Project"]
-           [new-project-form selected-users]])]
-       [project-btn open? selected-users]])))

@@ -5,14 +5,26 @@
             [ring.util.response :refer [redirect response]]
             [ring.middleware.anti-forgery :refer [*anti-forgery-token*]]
             [cosycat.components.ws :refer [send-clients]]
-
-            [cosycat.db.users :refer [lookup-user is-user? new-user normalize-user]]
+            [cosycat.db.users :refer [lookup-user new-user]]
+            [cosycat.db.utils :refer [is-user? normalize-user]]
             [cosycat.views.login :refer [login-page]]
+            [config.core :refer [env]]
             [buddy.auth.backends.session :refer [session-backend]]
             [buddy.sign.jws :as jws]
             [buddy.auth.backends.token :refer [jws-backend]]))
 
 (def secret "mysupercomplexsecret")
+
+(defn add-user-active [user]
+  (assoc user :active true))
+
+(defn is-admin-in-profile? [username {:keys [admins]}]
+  (some #{username} admins))
+
+(defn maybe-add-admin [{:keys [roles username] :as user} env]
+  (if (and (is-admin-in-profile? username env) (not (some (into #{} roles) ["admin"])))
+    (update user :roles into "admin")
+    user))
 
 (defn on-login-failure [req]
   (render
@@ -37,8 +49,9 @@
     (cond
       (not (= password repeatpassword)) (on-signup-failure req "Password mismatch")
       (is-user? db user)                (on-signup-failure req "User already exists")
-      :else (let [user (-> (new-user db user) (assoc :active true))]
-              (send-clients ws {:type :signup :data (normalize-user user :projects)})
+      :else (let [user (-> (new-user db user (is-admin-in-profile? username env))
+                           (normalize-user :settings :projects)
+                           add-user-active)]
               (-> (redirect (or next-url "/")) (assoc-in [:session :identity] user))))))
 
 (defn login-route
@@ -49,11 +62,10 @@
   (let [username (or username username-form)
         password (or password password-form)
         user {:username username :password password}]
-    (if-let [user (lookup-user db user)]
-      (let [user (assoc user :active true)]
-        (send-clients ws {:type :login :data (normalize-user user :project)})
-        (-> (redirect (or next-url "/"))
-            (assoc-in [:session :identity] user)))
+    (if-let [public-user (lookup-user db user)]
+      (let [public-user (maybe-add-admin public-user env)]
+        (send-clients ws {:type :login :data (add-user-active public-user)})
+        (-> (redirect (or next-url "/")) (assoc-in [:session :identity] public-user)))
       (on-login-failure req))))
 
 (defn logout-route
@@ -91,3 +103,7 @@
 
 (defn is-logged? [req]
   (get-in req [:session :identity]))
+
+(defn is-admin? [req]
+  (-> (get-in req [:session :identity :roles])
+      (contains? "admin")))

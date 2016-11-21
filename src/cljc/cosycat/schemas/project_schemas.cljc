@@ -3,13 +3,43 @@
             [schema.coerce :as coerce]
             [taoensso.timbre :as timbre]
             [cosycat.app-utils :refer [deep-merge]]
-            [cosycat.schemas.user-schemas :refer [settings-schema project-history-schema]]
+            [cosycat.schemas.user-schemas :refer [settings-schema queries-schema query-id-schema]]
+            [cosycat.schemas.event-schemas :refer [event-schema event-id-schema]]
             [cosycat.schemas.results-schemas :refer [query-results-schema]]))
 
-(def update-schema
-  {:type s/Str
+(def issue-id-schema s/Any)
+
+(def base-issue-schema
+  {:id issue-id-schema
+   :by s/Str
+   :type s/Str
    :timestamp s/Int
-   s/Any s/Any})
+   :status (s/enum "open" "closed")
+   :users (s/conditional string? (s/enum "all") :else [s/Str]) ;addressed users
+   :data {s/Any s/Any}
+   (s/optional-key :resolve)
+   {:status (s/enum "accepted" "rejected")
+    :comment s/Str
+    :timestamp s/Str
+    :by s/Str}
+   (s/optional-key :comments)
+   ;; comments are stored as objects indexed by comment id
+   ;; to make comment updates atomic (see http://stackoverflow.com/questions/18573117/updating-nested-arrays-in-mongodb-via-mongo-shell/18574256#18574256)
+   {s/Keyword ;; comment-id as keyword
+    {:comment s/Str
+     :id s/Any
+     :timestamp s/Int
+     :by s/Str
+     (s/optional-key :deleted) s/Bool
+     ;; Tree Structure with parent references
+     ;; https://docs.mongodb.com/v3.0/tutorial/model-tree-structures-with-parent-references/
+     ;; :children is an array of comment ids pointing to children
+     ;; at normalizing time - look up roots, - sort by timestamp and recurse
+     (s/optional-key :children) [s/Any]}}})
+
+(def issue-schema
+  #?(:cljs (assoc base-issue-schema (s/optional-key :meta) {s/Any s/Any})
+     :clj base-issue-schema))
 
 (def status-schema
   {:status (s/enum :ok :error)
@@ -17,14 +47,15 @@
 
 (def project-session-schema
   {:query query-results-schema
-   :status (s/conditional empty? {} :else status-schema)
+   :status (s/conditional empty? {} :else status-schema)   
    :components {s/Any s/Any}
-   :filtered-users #{s/Str}})             ;filter out annotations by other users
+   :filtered-users #{s/Str}}) ;filter out annotations by other users
 
 (defn make-keys-optional [schema]
-  (reduce-kv (fn [m k v] (if (s/optional-key? k)
-                           m
-                           (-> m (assoc (s/optional-key k) v) (dissoc k))))
+  (reduce-kv (fn [m k v]
+               (if (s/optional-key? k)
+                 (assoc m k v)
+                 (-> m (assoc (s/optional-key k) v) (dissoc k))))
              {}
              schema))
 
@@ -40,13 +71,21 @@
   #?(:clj {:name s/Str
            :description s/Str
            :created s/Int
+           :creator s/Str
            :users project-users-schema
-           (s/optional-key :updates) [update-schema]}
+           (s/optional-key :issues) [issue-schema]
+           (s/optional-key :events) [event-schema]}
      :cljs {:name s/Str
             :description s/Str
+            :creator s/Str
             :created s/Int
             :users [{:username s/Str :role s/Str}]
-            (s/optional-key :updates) [update-schema]
+            ;; things that need to be resolved
+            ;; coming from projects collection
+            (s/optional-key :issues) {issue-id-schema issue-schema}
+            ;; things that inform about events (new user, queryetc.)
+            ;; merged from both collections users and projects
+            (s/optional-key :events) {event-id-schema event-schema}            
+            (s/optional-key :queries) {query-id-schema queries-schema}
             (s/optional-key :settings) project-settings-schema
-            (s/optional-key :session) project-session-schema
-            (s/optional-key :history) project-history-schema}))
+            (s/optional-key :session) project-session-schema}))

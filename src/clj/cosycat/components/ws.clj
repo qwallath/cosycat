@@ -11,7 +11,7 @@
             [cosycat.utils :refer [write-str read-str ->int]]))
 
 (def messages
-  {:shutting-down {:type :info :data {:message "Server is going to sleep!" :by "server"}}
+  {:shutting-down {:type :info :data {:message "Server is going to sleep!"} :by "server"}
    :goodbye       {:type :info :data {:message "Goodbye world!"}}
    :hello         {:type :info :data {:message "Hello world!"}}})
 
@@ -38,6 +38,11 @@
 
 (defn get-active-users [{clients :clients :as ws}]
   (apply hash-set (keys @clients)))
+
+(defn add-active-info [ws user]
+  (if (contains? (get-active-users ws) (:username user))
+    (assoc user :active true)
+    (assoc user :active false)))
 
 (defn new-ws [& {:keys [router] :or {router ping-router}}]
   (map->WS {:router router}))

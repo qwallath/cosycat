@@ -28,7 +28,10 @@
             [cosycat.routes.session :refer [session-route]]
             [cosycat.routes.projects :refer [project-routes]]
             [cosycat.routes.settings :refer [settings-routes]]
-            [cosycat.routes.annotations :refer [annotation-routes]]))
+            [cosycat.routes.annotations :refer [annotation-routes]]
+            [cosycat.routes.users :refer [users-routes]]
+            [cosycat.routes.events :refer [events-routes]]
+            [cosycat.routes.admin :refer [admin-routes]]))
 
 (defn static-routes []
   (routes
@@ -73,12 +76,21 @@
     (try
       (handler req)
       (catch clojure.lang.ExceptionInfo e
+        (timbre/error (str e))
         (->> e ex-data :error (format-exception req)))
       (catch Throwable t
+        (timbre/error (str t))
         (->> t class str (format-exception req))))))
+
+(defn wrap-error [handler]
+  (fn [req]
+    (if (:dev? env)
+      ((wrap-exceptions handler) req)
+      ((wrap-internal-error handler) req))))
 
 (defn wrap-base [handler]
   (-> handler
+      ;; wrap-debug
       wrap-reload
       (wrap-authorization auth-backend) ;todo, swap with token backend (jwt)
       (wrap-authentication auth-backend) ;todo swap with token backend (jwt)
@@ -89,7 +101,7 @@
       wrap-nested-params
       wrap-params
       (wrap-transit-response {:encoding :json-verbose})
-      ((fn [handler] (if (:dev? env) (wrap-exceptions handler) (wrap-internal-error handler))))))
+      wrap-error))
 
 (defn wrap-app-component [handler components]
   (fn [req]
@@ -102,8 +114,9 @@
   [& route-fns]
   (apply routes (map #(%) route-fns)))
 
-(defn make-handler [component]
+(defn make-handler [component & {:keys [debug]}]
   (let [components (select-keys component (:components component))]
-    (-> (app-routes static-routes web-app-routes settings-routes annotation-routes project-routes base-routes)
+    (-> (app-routes static-routes web-app-routes settings-routes annotation-routes
+                    project-routes users-routes events-routes admin-routes base-routes)
         (wrap-app-component components)
         (wrap-routes wrap-base))))

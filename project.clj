@@ -1,4 +1,4 @@
-(defproject cosycat "0.1.0-alpha"
+(defproject cosycat "0.1.3-alpha"
   :description "Corpus query interface plus annotations"
   :license {:name "GNU v3.0"}  
   :dependencies [[org.clojure/clojure "1.8.0"]
@@ -16,8 +16,7 @@
                  [prone "0.8.2"]
                  [yogthos/config "0.8"]
                  [hiccup "1.0.5"]
-                 [reagent "0.6.0-alpha"
-                  :exclusions [cljsjs/react]]
+                 [reagent "0.6.0-alpha" :exclusions [cljsjs/react]]
                  [cljsjs/react-bootstrap "0.28.1-1"
                   :exclusions [org.webjars.bower/jquery cljsjs/react]]
                  [cljsjs/react-with-addons "0.14.3-0"]
@@ -46,7 +45,7 @@
 
   :main cosycat.main
   
-  :jvm-opts ["-Xmx4000M" "-Djava.awt.headless=true"]
+  :jvm-opts ["-Xmx4000M" "-Djava.awt.headless=true" "-XX:-OmitStackTraceInFastThrow"]
   
   :plugins [[lein-cljsbuild "1.1.1"]
             [lein-environ "1.0.1"]
@@ -66,10 +65,6 @@
              {:source-paths ["env/prod/clj"]
               :hooks [leiningen.cljsbuild]
               :prep-tasks ["compile" ["cljsbuild" "once"]]
-              :env {:database-url "mongodb://127.0.0.1:27017/cosycat"
-                    :pass "pass"
-                    :port 3000
-                    :session-expires 90}
               :omit-source true
               :aot :all
               :cljsbuild {:jar true

@@ -1,16 +1,23 @@
 (ns cosycat.schemas.user-schemas
-  (:require [schema.core :as s]))
+  (:require [schema.core :as s]
+            [cosycat.schemas.event-schemas :refer [event-schema]]))
 
 (def avatar-schema
   {:href s/Str
    :dominant-color s/Str})
 
-;;; query opts (used in [:me :settings] and [:projects [{:settings}])
+(def filter-opts-schema
+  {:attribute s/Str :value s/Str})
+
+(def sort-opts-schema
+  {:position s/Str :attribute s/Str :facet s/Str})
+
+;;; query opts (used both in [:me :settings] and [:projects [{:settings}])
 (def query-opts-schema
   {:corpus s/Str
    :query-opts {:context s/Int :from s/Int :page-size s/Int} ;from is kept updated
-   :sort-opts [{:position s/Str :attribute s/Str :facet s/Str}]
-   :filter-opts [{:attribute s/Str :value s/Str}]            ;multiple filters
+   :sort-opts [sort-opts-schema]
+   :filter-opts [filter-opts-schema]            ;multiple filters
    :snippet-opts {:snippet-size s/Int :snippet-delta s/Int}})
 
 (def settings-schema
@@ -18,12 +25,19 @@
    :query query-opts-schema
    (s/optional-key :tagsets) [s/Any]})
 
-(def project-history-schema
-  {:query [{:query-str s/Str :timestamp s/Int}]})
+(def query-id-schema s/Any)
+
+(def queries-schema                     ;metadata on previous stored queries
+  {:query-data {:query-str s/Str :corpus s/Str}
+   :id query-id-schema
+   :timestamp s/Int
+   :discarded #?(:clj [{:timestamp s/Int :hit s/Any}]
+                 :cljs #{s/Any})})
 
 (def user-project-schema   ;server-only (get merged with project in the client)
-  {:settings settings-schema
-   :history project-history-schema})
+  {:settings settings-schema            ;project-specific settings
+   :queries [queries-schema]            ;query-related metadata
+   :events [event-schema]})             ;user-specific project events (queries, etc.)
 
 (def user-schema
   #?(:clj {:username s/Str

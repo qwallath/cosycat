@@ -6,7 +6,7 @@
     :filter-opts {:attribute "title" :value "random"}))
 
 (defn default-settings
-  [& {:keys [corpora] :or {corpora []}}] ;TODO: settings should be adapted to corpus config
+  [& {:keys [corpora] :or {corpora []}}]
   (let [corpus (first (map :corpus corpora))]
     {:notifications {:delay 7500}
      :query {:query-opts {:context 5 :from 0 :page-size 5}
@@ -26,10 +26,12 @@
    :status {}
    :components {:panel-order ["query-frame" "annotation-panel"]
                 :panel-open {"query-frame" true "annotation-panel" false}
+                :active-project-frame :users
+                :issue-filters {:status "all" :type "all"}
                 :open-hits #{}
                 :token-field :word}
    :filtered-users (into #{} (map :username (:users project)))})
 
-(def default-history {:app-events [] :project-events [] :user-events []})
+(def default-history {:app-events []})
 
 (def default-project-history {:query []})

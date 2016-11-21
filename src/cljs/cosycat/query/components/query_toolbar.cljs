@@ -5,13 +5,12 @@
             [react-bootstrap.components :as bs]
             [cosycat.utils :refer [->map by-id]]
             [cosycat.components :refer [dropdown-select]]
+            [cosycat.query.components.annotate-query-dropdown :refer [annotate-query-dropdown]]
             [taoensso.timbre :as timbre]))
 
 (defn on-select [query-opt & {:keys [has-query?]}]
   (fn [v]
-    (re-frame/dispatch [:set-settings [:query :query-opts query-opt] v])
-    (when (and has-query? @has-query?)
-      (re-frame/dispatch [:query-refresh :results-frame]))))
+    (re-frame/dispatch [:set-settings [:query :query-opts query-opt] v])))
 
 (defn corpus-select [corpus & {:keys [corpora] :as args}]
   (fn [corpus & {:keys [corpora]}]
@@ -28,7 +27,7 @@
     [dropdown-select
      (merge {:label "window: "
              :header "Select window size"
-             :options (map #(->map % %) [1 2 3 4 5 6 7 8 9 10 15 20 25])
+             :options (map #(->map % %) (range 25))
              :model @context
              :select-fn (on-select :context :has-query? has-query?)}
             (dissoc args :has-query?))]))
@@ -69,29 +68,37 @@
     (when-not (zero? (count query-str))
       (re-frame/dispatch [:query query-str]))))
 
+(defn query-will-update [query-str query-str-atom]
+  (fn []
+    (reset! query-str-atom @query-str)))
+
 (defn query-toolbar []
-  (let [query-str (re-frame/subscribe [:project-session :query :results-summary :query-str])
-        query-str-atom (reagent/atom @query-str)]
-    (fn []
-      [:div.row
-       [:div.col-lg-5.col-sm-7
-        [query-opts-menu]]
-       [:div.col-lg-7.col-sm-5
-        [:div.input-group
-         [:input#query-str.form-control.form-control-no-border
-          {:style {:width "100%"}
-           :type "text"
-           :name "query"
-           :value @query-str-atom
-           :placeholder "Example: [word='(wo)?man']" ;remove?
-           :autoCorrect "false"
-           :autoCapitalize "false"
-           :autoComplete "false"
-           :spellCheck "false"
-           :on-key-down #(.stopPropagation %) ;avoid triggerring global events
-           :on-key-press on-key-press
-           :on-change #(reset! query-str-atom (.. % -target -value))}]
-         [:span.input-group-addon
-          {:on-click on-click-search
-           :style {:cursor "pointer"}}
-          [bs/glyphicon {:glyph "search"}]]]]])))
+  (let [query-str (re-frame/subscribe [:project-session :query :results-summary :query-str])]    
+    (reagent/create-class
+     {:component-did-mount #(set! (.-value (.getElementById js/document "query-str")) @query-str)
+      :reagent-render
+      (fn []
+        [:div.row
+         [:div.col-lg-5.col-sm-7 [query-opts-menu]]
+         [:div.col-lg-7.col-sm-5
+          [:div.container-fluid
+           [:div.row
+            [:div.col-lg-10.col-md-9.col-sm-9.pad
+             [:div.input-group
+              [:input#query-str.form-control.form-control-no-border
+               {:style {:width "100%"}
+                :type "text"
+                :name "query"
+                :placeholder "Example: [word='(wo)?man']"
+                :autoCorrect "false"
+                :autoCapitalize "false"
+                :autoComplete "false"
+                :spellCheck "false"
+                :on-key-down #(.stopPropagation %) ;avoid triggerring global events
+                :on-key-press on-key-press}]
+              [:span.input-group-addon
+               {:on-click on-click-search
+                :style {:cursor "pointer"}}
+               [bs/glyphicon {:glyph "search"}]]]]
+            [:div.col-lg-2.col-md-3.col-sm-3.pad
+             [:div.pull-right [annotate-query-dropdown]]]]]]])})))

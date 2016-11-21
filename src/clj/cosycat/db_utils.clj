@@ -9,8 +9,6 @@
 
 (defn clear-dbs
   [{db :db :as db-conn} & {:keys [collections] :or {collections (keys colls)}}]
-  ;; let [pass (read-line)]
-  ;; if (= pass (:pass env))
   (let [projects (mc/find-maps db (:projects colls))]
     ;; remove projects
     (doseq [{project-name :name} projects]
@@ -27,7 +25,7 @@
 (defn clean-env-no-prompt []
   (let [root (clojure.java.io/file (:dynamic-resource-path env))
         db (.start (new-db (:database-url env)))]
-    (println "Cleaning app-resources")
+    (timbre/info "Cleaning app-resources")
     (delete-directory root)
     (clear-dbs db)
     (.stop db))) 

@@ -1,10 +1,20 @@
 (ns cosycat.utils
   (:require [cognitect.transit :as transit]
             [clojure.java.io :as io]
-            [schema.core :as s]))
+            [clojure.edn :as edn]
+            [schema.core :as s]
+            [config.core :refer [env]]))
 
 ;;; RESOURCES
 (def ^:dynamic *encoding* "UTF-8")
+
+(defn project-version []
+  (-> (if (:dev? env)
+        "project.clj"        
+        (io/resource "project.clj"))
+      slurp
+      edn/read-string
+      (nth 2)))
 
 ;;; SYNTAX
 (defn read-str
@@ -33,6 +43,13 @@
   (when *assert*
     `(when-not ~x
        (throw (ex-info ~@args)))))
+
+(defn new-uuid
+  "Computes a random id which can be used as a uuid for a new document"
+  []
+  (str (java.util.UUID/randomUUID))
+  ;; (ObjectId.) ;or just use mongodb's id
+  )
 
 ;;; ANNS
 (defn new-token-id

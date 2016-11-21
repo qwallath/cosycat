@@ -3,7 +3,7 @@
             [re-frame.core :as re-frame]
             [cosycat.roles :refer [project-user-roles-descs]]
             [cosycat.utils :refer [color-codes date-str->locale parse-time human-time]]
-            [cosycat.app-utils :refer [deep-merge]]
+            [cosycat.app-utils :refer [deep-merge dekeyword]]
             [cosycat.localstorage :refer [fetch-db get-backups]]
             [taoensso.timbre :as timbre]
             [goog.string :as gstr]
@@ -12,8 +12,21 @@
 (def css-transition-group
   (reagent/adapt-react-class js/React.addons.CSSTransitionGroup))
 
-(defn throbbing-panel [& {:keys [css-class] :or {css-class "loader"}}]
-  [:div.text-center [:div {:class css-class}]])
+(def transition-group
+  (reagent/adapt-react-class js/React.addons.TransitionGroup))
+
+(defn throbbing-panel
+  [& {:keys [throbber] :or {throbber :loader-ticks}}]
+  [:div.container-fluid
+   [:div.row {:style {:height "55px"}}]
+   [:div.text-center
+    (case throbber
+      :loader [:div {:class "loader"}]
+      :loader-ticks [:div {:class "loader-ticks"}]
+      :round-loader [:div [:img {:src "img/round_spinner.gif"}]]
+      :horizontal-loader [:div [:img {:src "img/horizontal_spinner.gif"}]]
+      :jupiter [:div [:img {:src "img/jupiter.gif"}]])]
+   [:div.row {:style {:height "55px"}}]])
 
 (defn error-panel [& {:keys [status content]}]
   {:pre [(and status)]}
@@ -59,25 +72,31 @@
               :error "zmdi-alert-circle")}]])
 
 (defn right-href [href]
-  (if (.startsWith href "public")
+  (if (and href (.startsWith href "public"))
     (second (gstr/splitLimit href "/" 1))
     href))
 
 (defn user-thumb
-  [avatar-href & [props]]
-  [bs/image
-   (merge {:src (right-href avatar-href)
-           :height "42" :width "42"
-           :circle true}
-          props)])
+  ([href] (user-thumb {} href))
+  ([props href]
+   [bs/image
+    (merge {:src (right-href href)
+            :height "42" :width "42"
+            :circle true}
+           props)]))
 
 (defn user-selection-component
   [{username :username {href :href} :avatar}]
   (fn [{username :username {href :href} :avatar}]
-    [:div username
-     [:span
-      {:style {:padding-left "10px"}}
-      [user-thumb href {:height "25px" :width "25px"}]]]))
+    [:div {:style {:padding "1px 4px"
+                   :border-radius "4.5px"
+                   :display "inline-block"
+                   :border-style "outset"
+                   :background-color "#e2e2e2"}}
+     [:div username
+      [:span
+       {:style {:padding-left "10px"}}
+       [user-thumb {:height "25px" :width "25px"} href]]]]))
 
 (defn move-cursor [dir els]
   (fn [idx]
@@ -123,7 +142,7 @@
             [:span.input-group-btn
              [:button.btn.btn-default
               {:type "button"
-               :on-click #(on-submit user current-role)}
+               :on-click #(do (swap! editing not) (on-submit user current-role))}
               [bs/glyphicon {:glyph "ok"}]]])
           (when editable?
             [:span.input-group-btn
@@ -176,6 +195,35 @@
      {:overlay (reagent/as-component [bs/tooltip {:id "tooltip"} "Active"])}
      [:div {:style (assoc style :border-radius "50%" :background-color color)}]]))
 
+(defn user-attributes [user & {:keys [align] :or {align :left}}]
+  (fn [{:keys [avatar username firstname lastname email created last-active active] :as user}]
+    [bs/table
+     {:style {:table-layout "fixed"}}
+     [:colgroup [:col {:span 1 :style {:width (if (= align :left) "10%" "90%")}}]]
+     [:tbody
+      {:style {:text-align "right"}}
+      (if (= align :left)
+        [:tr
+         [:td [bs/glyphicon {:glyph "envelope"}]]
+         [text-td email]]
+        [:tr
+         [text-td email]
+         [:td [bs/glyphicon {:glyph "envelope"}]]])
+      (if (= align :left)
+        [:tr
+         [:td [bs/glyphicon {:glyph "time"}]]
+         [text-td [:span "Joined on " [:span.text-muted (parse-time created)]]]]
+        [:tr
+         [text-td [:span "Joined on " [:span.text-muted (parse-time created)]]]
+         [:td [bs/glyphicon {:glyph "time"}]]])
+      (if (= align :left)
+        [:tr
+         [:td [bs/glyphicon {:glyph "exclamation-sign"}]]
+         [text-td [:span "Last active " [:span.text-muted (human-time last-active)]]]]
+        [:tr
+         [text-td [:span "Last active " [:span.text-muted (human-time last-active)]]]
+         [:td [bs/glyphicon {:glyph "exclamation-sign"}]]])]]))
+
 (defn user-profile-component
   "A component displaying basic user information. If `displayable?`, it requires an initial role,
    which is use to display an init view of the role, otherwise it presents the user as not
@@ -190,18 +238,15 @@
     [:div.container-fluid
      [:div.row
       [:div.col-sm-4.col-md-4
-       [:h4 [:img.img-rounded.img-responsive {:src (:href avatar)}]]]
+       [:h4 [:img.img-rounded.img-responsive
+             {:src (:href avatar) :style {:max-height "65.5px"}}]]] ;gravatar height
       [:div.col-sm-8.col-md-8
-       [:h4 username [:br] [:span [:small [:cite (str firstname " " lastname)]]]]
+       [:h4.truncate username
+        [:br]
+        [:span [:small [:cite (str firstname " " lastname)]]]]
        (when active [online-dot active])]]
      [:div.row {:style {:padding "0 15px"}}
-      [bs/table
-       {:style {:table-layout "fixed"}}
-       [:colgroup [:col {:span 1 :style {:width "25%"}}]]
-       [:tbody
-        [:tr [:td [bs/glyphicon {:glyph "envelope"}]] [text-td email]]
-        [:tr [:td [:span (str "Created:")]] [text-td (parse-time created)]]
-        [:tr [:td [:span (str "Active:") ]] [text-td (human-time last-active)]]]]]
+      [user-attributes user]]
      [:div.row {:style {:padding "0 15px"}}
       [select-role-btn user roles opts]]]))
 
@@ -212,12 +257,17 @@
 (defn prepend-cell
   "prepend a cell `child` to a seq of siblings (useful for prepending :td in a :tr)"
   [siblings {:keys [key child opts]}]
-  (vec (cons ^{:key k} (apply merge [child] opts) siblings)))
+  (vec (cons ^{:key key} (apply merge [child] opts) siblings)))
+
+(defn append-cell
+  "append a cell `child` to a seq of siblings (useful for appending :td in a :tr)"
+  [siblings {:keys [key child opts]}]
+  (conj (vec siblings) ^{:key key} (apply merge [child] opts)))
 
 (defn notification-child                ;add a button to display notification meta
   [message date status href meta]
   [:div.notification
-   {:class "success"}
+   {:class (dekeyword status)}
    [:div.illustration
     [user-thumb href]]
    [:div.text
@@ -259,7 +309,7 @@
             :style {:max-height "40px"}
             :onClick #(re-frame/dispatch [:update-filtered-users username])}
            opts)
-          (reagent/as-component [user-thumb href {:height "20px" :width "20px"}])]]))))
+          (reagent/as-component [user-thumb {:height "20px" :width "20px"} href])]]))))
 
 (defn filter-annotation-buttons []
   (let [filtered-users (re-frame/subscribe [:active-project :filtered-users])
@@ -322,3 +372,8 @@
           "Session message"]]]
        [bs/modal-body
         [bs/alert {:bsStyle "danger"} message]]])))
+
+(defn compute-feedback [project-name project-name-atom]
+  (cond (empty? @project-name-atom) ""
+        (not= @project-name-atom project-name) "has-error"
+        :else "has-success"))

@@ -158,8 +158,10 @@
                        (vals @results-by-id))))))
 
 (defn get-users
-  ([db] (cons (:me db) (map :user (:users db))))
-  ([db by-name] (filter #(contains? by-name (:username %)) (get-users db))))
+  ([{:keys [users me] :as db}]
+   (cons me (vals users)))
+  ([db by-name]
+   (filter #(contains? by-name (:username %)) (get-users db))))
 
 (defn get-user [db username]
   (first (get-users db #{username})))
@@ -185,13 +187,6 @@
  (fn [db [_ & path]]
    (let [active-project-name (reaction (get-in @db [:session :active-project]))]
      (reaction (get-in @db (into [:projects @active-project-name] path))))))
-
-(re-frame/register-sub
- :active-project-creator
- (fn [db _]
-   (let [active-project-name (reaction (get-in @db [:session :active-project]))
-         users (reaction (get-in @db [:projects @active-project-name :users]))]
-     (reaction (-> (filter #(= "creator" (:role %)) @users) first :username)))))
 
 (re-frame/register-sub
  :active-project-role
@@ -221,7 +216,34 @@
                        (map #(get-in % [:avatar :dominant-color]) @filtered-users-info))))))
 
 (re-frame/register-sub
- :read-history
- (fn [db [_ path & {:keys [filter-fn] :or {filter-fn identity}}]]
-   (let [ws-history (reaction (get-in @db (into [:history] path)))]
-     (reaction (filter filter-fn @ws-history)))))
+ :events
+ (fn [db _]
+   (let [active-project (reaction (get-in @db [:session :active-project]))]
+     (reaction (vals (get-in @db [:projects @active-project :events])))
+     ;; TODO: if not in project it should return app-wide events
+     )))
+
+(re-frame/register-sub
+ :project-queries
+ (fn [db [_ & {:keys [filter-corpus] :or {filter-corpus true}}]]
+   (let [active-project (reaction (get-in @db [:session :active-project]))
+         corpus (reaction (get-in @db [:settings :query :corpus]))]
+     (reaction (cond->> (vals (get-in @db [:projects @active-project :queries]))
+                 filter-corpus (filter #(= @corpus (get-in % [:query-data :corpus]))))))))
+
+(re-frame/register-sub
+ :discarded-hits
+ (fn [db _]
+   (let [active-project (reaction (get-in @db [:session :active-project]))
+         path [:session :components :active-query]
+         active-query (reaction (get-in @db (into [:projects @active-project] path)))]
+     (reaction (get-in @db [:projects @active-project :queries @active-query :discarded])))))
+
+(re-frame/register-sub
+ :discarded-hit
+ (fn [db [_ hit-id]]
+   (let [active-project (reaction (get-in @db [:session :active-project]))
+         path [:session :components :active-query]
+         query (reaction (get-in @db (into [:projects @active-project] path)))
+         discarded (reaction (get-in @db [:projects @active-project :queries @query :discarded]))]
+     (reaction (contains? @discarded hit-id)))))
